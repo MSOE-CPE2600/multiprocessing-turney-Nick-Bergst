@@ -19,3 +19,4 @@ $(EXECUTABLE): $(OBJECTS)
 
 clean:
 	rm -rf $(OBJECTS) $(EXECUTABLE) *.d
+	rm *.jpg

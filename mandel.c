@@ -9,7 +9,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include "jpegrw.h"
+#include <time.h>
 
 // local routines
 static int iteration_to_color( int i, int max );
@@ -21,23 +24,31 @@ static void show_help();
 
 int main( int argc, char *argv[] )
 {
+	struct timespec begin, end;
+	clock_gettime(CLOCK_MONOTONIC_RAW, &begin);
+
 	char c;
 
 	// These are the default configuration values used
 	// if no command line arguments are given.
-	const char *outfile = "mandel.jpg";
+	const char *outfile = "mandelbrot.jpg";
 	double xcenter = 0;
 	double ycenter = 0;
 	double xscale = 4;
 	double yscale = 0; // calc later
-	int    image_width = 1000;
-	int    image_height = 1000;
-	int    max = 1000;
-
+	int    image_width = 2048;
+	int    image_height = 2048;
+	int    max = 2048;
+	int    makeMovie = 0;
+	double zoomRate = 0.05;
+	int procRuns = 5;
+	int a = 0; //does not change
+	int b = 0; //does not change
+	char fileout[50]; //does not change
 	// For each command line argument given,
 	// override the appropriate configuration value.
 
-	while((c = getopt(argc,argv,"x:y:s:W:H:m:o:h"))!=-1) {
+	while((c = getopt(argc,argv,"x:y:s:W:H:m:o:h:M:z:p"))!=-1) {
 		switch(c) 
 		{
 			case 'x':
@@ -65,30 +76,82 @@ int main( int argc, char *argv[] )
 				show_help();
 				exit(1);
 				break;
+			case 'M':
+				makeMovie = atoi(optarg);
+				break;
+			case 'z':
+				zoomRate = atof(optarg);
+				break;
+			case 'p':
+				procRuns = atoi(optarg);
+				break;
 		}
 	}
 
-	// Calculate y scale based on x scale (settable) and image sizes in X and Y (settable)
-	yscale = xscale / image_width * image_height;
+	if (makeMovie == 0) {
+		// Calculate y scale based on x scale (settable) and image sizes in X and Y (settable)
+		yscale = xscale / image_width * image_height;
 
-	// Display the configuration of the image.
-	printf("mandel: x=%lf y=%lf xscale=%lf yscale=%1f max=%d outfile=%s\n",xcenter,ycenter,xscale,yscale,max,outfile);
+		// Display the configuration of the image.
+		printf("mandel: x=%lf y=%lf xscale=%lf yscale=%1f max=%d outfile=%s\n",xcenter,ycenter,xscale,yscale,max,outfile);
 
-	// Create a raw image of the appropriate size.
-	imgRawImage* img = initRawImage(image_width,image_height);
+		// Create a raw image of the appropriate size.
+		imgRawImage* img = initRawImage(image_width,image_height);
 
-	// Fill it with a black
-	setImageCOLOR(img,0);
+		// Fill it in with black
+		setImageCOLOR(img,0);
 
-	// Compute the Mandelbrot image
-	compute_image(img,xcenter-xscale/2,xcenter+xscale/2,ycenter-yscale/2,ycenter+yscale/2,max);
+		// Compute the Mandelbrot image
+		compute_image(img,xcenter-xscale/2,xcenter+xscale/2,ycenter-yscale/2,ycenter+yscale/2,max);
 
-	// Save the image in the stated file.
-	storeJpegImageFile(img,outfile);
+		// Save the image in the stated file.
+		storeJpegImageFile(img,outfile);
 
-	// free the mallocs
-	freeRawImage(img);
-
+		// free the mallocs
+		freeRawImage(img);
+	} else {
+		pid_t pid;
+		for (a = 0; a < procRuns; a++) {
+			pid = fork();
+			//printf("a: %d\ta + 1: %d\tgetpid: %d\tpid: %d\n", a, a + 1, getpid(), pid);
+			if (pid == 0) {
+				//printf("pid 0!\n");
+				int leftOver;
+				if (50 % procRuns != 0 && a == procRuns - 1) {
+					leftOver = 50 % procRuns;
+				} else {
+					leftOver = 0;
+				}
+				for (b = a * (int)(50 / procRuns); b <(((int)(50 / procRuns)) * (a + 1)) + leftOver; b++) {
+					//int b = 0;
+					//printf("b: %d\n", b);
+					//make a new xscale from the original, and calculate it
+					double nuxscale = xscale + (b * zoomRate);
+					// Calculate y scale based on x scale (settable) and image sizes in X and Y (settable)
+					yscale = nuxscale / image_width * image_height;
+					// write a filename
+					sprintf(fileout, "mandel%d.jpg", b);
+					// Display the configuration of the image.
+					printf("mandel: x=%lf y=%lf xscale=%lf yscale=%1f max=%d fileout=%s\n",xcenter,ycenter,nuxscale,yscale,max,fileout);
+					// Create a raw image of the appropriate size.
+					imgRawImage* img = initRawImage(image_width,image_height);
+					// Fill it in with black
+					setImageCOLOR(img,0);
+					// Compute the Mandelbrot image
+					compute_image(img,xcenter-nuxscale/2,xcenter+nuxscale/2,ycenter-yscale/2,ycenter+yscale/2,max);
+					// Save the image in the stated file.
+					storeJpegImageFile(img,fileout);
+				}
+				return 1;
+			}
+		}
+		for (a = 0; a < procRuns; a++) {
+			wait(NULL);
+		}
+		printf("\nType \n\tffmpeg -i mandel%cd.jpg [exapmle file name].mpeg\n to compile the movie!\n", 37);
+	}
+	clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+	printf ("Total time = %f seconds\n",(end.tv_nsec - begin.tv_nsec) / 1000000000.0 +(end.tv_sec  - begin.tv_sec));
 	return 0;
 }
 
@@ -170,13 +233,16 @@ void show_help()
 {
 	printf("Use: mandel [options]\n");
 	printf("Where options are:\n");
-	printf("-m <max>    The maximum number of iterations per point. (default=1000)\n");
+	printf("-m <max>    The maximum number of iterations per point. (default=2048)\n");
 	printf("-x <coord>  X coordinate of image center point. (default=0)\n");
 	printf("-y <coord>  Y coordinate of image center point. (default=0)\n");
 	printf("-s <scale>  Scale of the image in Mandlebrot coordinates (X-axis). (default=4)\n");
-	printf("-W <pixels> Width of the image in pixels. (default=1000)\n");
-	printf("-H <pixels> Height of the image in pixels. (default=1000)\n");
-	printf("-o <file>   Set output file. (default=mandel.bmp)\n");
+	printf("-W <pixels> Width of the image in pixels. (default=2048)\n");
+	printf("-H <pixels> Height of the image in pixels. (default=2048)\n");
+	printf("-M          Make a video zooming out of the mandelbrot set. (default=0)\n");
+	printf("-z          Set the rate the video zooms out at. (default=0.05)\n");
+	printf("-p          Set the amount of child processes to generate the movie frames. If your chosen number is not divisible by 50, it will revert to default. (default=5)\n");
+	printf("-o <file>   Set output file. (default=mandelbrot.jpg)\n");
 	printf("-h          Show this help text.\n");
 	printf("\nSome examples are:\n");
 	printf("mandel -x -0.5 -y -0.5 -s 0.2\n");
